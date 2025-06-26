@@ -20,7 +20,7 @@ st.set_page_config(
     page_title="Portail de demandes - Performance & Forecasting",
     page_icon=favicon_url,
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded" # Modifié pour que le menu soit visible par défaut
 )
 
 # ==============================================================================
@@ -439,16 +439,26 @@ def show_tickets_list():
         return
 
     for _, ticket in df.iterrows():
-        priority_map = {"Critique": "🔥", "Élevée": "⚠️", "Normale": "🔹", "Faible": "⚪"}
-        icon = priority_map.get(ticket['priority'], "❓")
-        expander_title = f"{icon} **#{ticket['id']} - {ticket['title']}** | Statut : **{ticket['status']}** | Priorité : **{ticket['priority']}**"
+        priority_map = {"Critique": ("bi-exclamation-triangle-fill", "#E74C3C"), "Élevée": ("bi-exclamation-circle-fill", "#F39C12"), "Normale": ("bi-info-circle-fill", "#3498DB"), "Faible": ("bi-record-circle", "grey")}
+        icon, color = priority_map.get(ticket['priority'], ("bi-question-circle", "white"))
+        
+        expander_title_html = f"""
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span style="font-weight: bold;">#{ticket['id']} - {ticket['title']}</span>
+            <span>
+                <span style='color:{color}; margin-right: 1rem;'><i class='bi {icon}'></i> {ticket['priority']}</span>
+                <span style='background-color: #4A4A6A; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'>{ticket['status']}</span>
+            </span>
+        </div>
+        """
 
-        with st.expander(expander_title, expanded=False):
-            if ticket['status'] == TicketStatus.TERMINE.value:
-                st.success("Cette demande est terminée et archivée.")
-            elif ticket['status'] == TicketStatus.REJETE.value:
-                st.error("Cette demande a été rejetée.")
-                
+        with st.expander(f"Ticket #{ticket['id']}", expanded=False):
+            st.markdown(expander_title_html, unsafe_allow_html=True)
+            st.markdown("---")
+
+            if ticket['status'] == 'Terminé':
+                st.markdown('<div style="background-color:#2F2F4A; padding: 1rem; border-radius: 0.5rem;">', unsafe_allow_html=True)
+            
             main_cols = st.columns([2, 1])
             with main_cols[0]:
                 tab_details, tab_reqs, tab_analyst = st.tabs(["Détails", "Exigences", "Suivi Analyste"])
@@ -499,6 +509,10 @@ def show_tickets_list():
                         if new_comment:
                             add_comment(conn, ticket['id'], st.session_state['user_id'], new_comment)
                             st.cache_data.clear(); st.rerun()
+
+            if ticket['status'] == 'Terminé':
+                st.markdown('</div>', unsafe_allow_html=True)
+
 
 def show_user_management_page():
     """Affiche la page de gestion des utilisateurs pour les analystes."""
