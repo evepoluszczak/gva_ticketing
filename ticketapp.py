@@ -66,10 +66,6 @@ def load_css():
     st.markdown("""
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <style>
-        /* Masquer le bouton de réduction du menu latéral qui peut parfois apparaître */
-        button[kind="sidebar"] {
-            display: none;
-        }
         /* Thème sombre et polices */
         html, body, [class*="st-"] {
             font-family: 'Inter', sans-serif;
@@ -542,8 +538,8 @@ def show_tickets_list():
                             add_comment(conn, ticket['id'], st.session_state['user_id'], new_comment)
                             st.cache_data.clear(); st.rerun()
 
-        if ticket['status'] == 'Terminé':
-            st.markdown('</div>', unsafe_allow_html=True)
+            if ticket['status'] == 'Terminé':
+                st.markdown('</div>', unsafe_allow_html=True)
 
 
 def show_user_management_page():
@@ -605,6 +601,37 @@ def main():
     if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
     
     if st.session_state['logged_in']:
+        
+        with st.sidebar:
+            st.title(f"Bonjour, {st.session_state.get('full_name', 'Utilisateur').split()[0]}")
+            st.markdown("---")
+            
+            if "view" not in st.session_state:
+                st.session_state.view = "Dashboard" if st.session_state.get('is_analyst') else "Suivi des demandes"
+
+            if st.button("Suivi des demandes", use_container_width=True, type="primary" if st.session_state.view == "Suivi des demandes" else "secondary"):
+                st.session_state.view = "Suivi des demandes"
+            if st.button("Nouvelle demande", use_container_width=True, type="primary" if st.session_state.view == "Nouvelle demande" else "secondary"):
+                st.session_state.view = "Nouvelle demande"
+                
+            if st.session_state.get('is_analyst'):
+                st.markdown("---")
+                st.subheader("Administration")
+                if st.button("Dashboard", use_container_width=True, type="primary" if st.session_state.view == "Dashboard" else "secondary"):
+                    st.session_state.view = "Dashboard"
+                if st.button("Gestion des utilisateurs", use_container_width=True, type="primary" if st.session_state.view == "Gestion des utilisateurs" else "secondary"):
+                    st.session_state.view = "Gestion des utilisateurs"
+                
+            st.markdown("---")
+            if st.button("Mon Profil", use_container_width=True, type="primary" if st.session_state.view == "Mon Profil" else "secondary"):
+                 st.session_state.view = "Mon Profil"
+            if st.button("Déconnexion", use_container_width=True):
+                auth_view = st.session_state.get('auth_view', 'login')
+                for key in list(st.session_state.keys()): del st.session_state[key]
+                st.session_state.auth_view = auth_view
+                st.session_state.logged_in = False
+                st.rerun()
+
         conn = create_connection()
         # --- Notification de nouveau ticket pour les analystes ---
         if st.session_state.get('is_analyst'):
@@ -617,44 +644,12 @@ def main():
                 plural = "s" if new_count > 1 else ""
                 st.toast(f"{new_count} nouvelle{plural} demande{plural} !", icon="🔔")
                 st.session_state.last_ticket_count = current_ticket_count
-
-        if "view" not in st.session_state:
-            st.session_state.view = "Dashboard" if st.session_state.get('is_analyst') else "Suivi des demandes"
         
-        st.sidebar.title(f"Bonjour, {st.session_state.get('full_name', 'Utilisateur').split()[0]}")
-        st.sidebar.markdown("---")
-        
-        # Navigation pour tous les utilisateurs
-        if st.sidebar.button("Suivi des demandes", use_container_width=True, type="primary" if st.session_state.view == "Suivi des demandes" else "secondary"):
-            st.session_state.view = "Suivi des demandes"
-        if st.sidebar.button("Nouvelle demande", use_container_width=True, type="primary" if st.session_state.view == "Nouvelle demande" else "secondary"):
-            st.session_state.view = "Nouvelle demande"
-            
-        # Navigation réservée aux analystes
-        if st.session_state.get('is_analyst'):
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("Administration")
-            if st.sidebar.button("Dashboard", use_container_width=True, type="primary" if st.session_state.view == "Dashboard" else "secondary"):
-                st.session_state.view = "Dashboard"
-            if st.sidebar.button("Gestion des utilisateurs", use_container_width=True, type="primary" if st.session_state.view == "Gestion des utilisateurs" else "secondary"):
-                st.session_state.view = "Gestion des utilisateurs"
-            
-        st.sidebar.markdown("---")
-        if st.sidebar.button("Mon Profil", use_container_width=True, type="primary" if st.session_state.view == "Mon Profil" else "secondary"):
-             st.session_state.view = "Mon Profil"
-        if st.sidebar.button("Déconnexion", use_container_width=True):
-            auth_view = st.session_state.get('auth_view', 'login')
-            for key in list(st.session_state.keys()): del st.session_state[key]
-            st.session_state.auth_view = auth_view
-            st.session_state.logged_in = False
-            st.rerun()
-
-        # Rafraîchir la page si la vue change
         if 'current_view' not in st.session_state: st.session_state.current_view = st.session_state.view
         if st.session_state.current_view != st.session_state.view:
             st.session_state.current_view = st.session_state.view
             st.rerun()
-
+            
         if st.session_state.view == "Dashboard": show_dashboard()
         elif st.session_state.view == "Suivi des demandes": show_tickets_list()
         elif st.session_state.view == "Nouvelle demande": show_ticket_form()
