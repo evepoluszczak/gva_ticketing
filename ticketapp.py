@@ -20,7 +20,7 @@ st.set_page_config(
     page_title="Portail de demandes - Performance & Forecasting",
     page_icon=favicon_url,
     layout="wide",
-    initial_sidebar_state="expanded" # Modifié pour que le menu soit visible par défaut
+    initial_sidebar_state="expanded" 
 )
 
 # ==============================================================================
@@ -66,6 +66,10 @@ def load_css():
     st.markdown("""
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <style>
+        /* Masquer le bouton de réduction du menu latéral qui peut parfois apparaître */
+        button[kind="sidebar"] {
+            display: none;
+        }
         /* Thème sombre et polices */
         html, body, [class*="st-"] {
             font-family: 'Inter', sans-serif;
@@ -376,39 +380,65 @@ def show_dashboard():
         fig_priority.update_layout(xaxis_title="Priorité", yaxis_title="Nombre de demandes", showlegend=False)
         chart_cols[1].plotly_chart(fig_priority, use_container_width=True)
 
-def show_ticket_form():
-    st.markdown("<h2><i class='bi bi-plus-square'></i> Créer une nouvelle demande</h2>", unsafe_allow_html=True)
-    with st.form("new_ticket_form"):
-        st.info("Veuillez fournir un maximum de détails pour une prise en charge efficace de votre demande.")
-        title = st.text_input("Titre de la demande *", placeholder="Ex: Rapport hebdomadaire des vols retardés")
+def show_ticket_form(ticket_to_edit=None):
+    """Affiche le formulaire pour créer ou modifier un ticket."""
+    is_edit_mode = ticket_to_edit is not None
+    form_title = "Modifier la demande" if is_edit_mode else "Créer une nouvelle demande"
+    button_label = "Enregistrer les modifications" if is_edit_mode else "Soumettre la demande"
+    
+    st.markdown(f"<h2><i class='bi bi-plus-square'></i> {form_title}</h2>", unsafe_allow_html=True)
+    
+    with st.form(key="ticket_form"):
+        if not is_edit_mode:
+            st.info("Veuillez fournir un maximum de détails pour une prise en charge efficace de votre demande.")
+        
+        title = st.text_input("Titre de la demande *", value=ticket_to_edit['title'] if is_edit_mode else "")
         
         col1, col2 = st.columns(2)
-        ticket_type = col1.selectbox("Type de demande *", [t.value for t in TicketType])
-        priority = col2.selectbox("Niveau de priorité *", [p.value for p in TicketPriority], index=2)
-        category = col1.selectbox("Catégorie fonctionnelle *", [c.value for c in TicketCategory])
-        expected_delivery = col2.date_input("Date de livraison souhaitée", min_value=datetime.date.today())
+        type_options = [t.value for t in TicketType]
+        priority_options = [p.value for p in TicketPriority]
+        category_options = [c.value for c in TicketCategory]
+        
+        type_index = type_options.index(ticket_to_edit['ticket_type']) if is_edit_mode and ticket_to_edit['ticket_type'] in type_options else 0
+        priority_index = priority_options.index(ticket_to_edit['priority']) if is_edit_mode and ticket_to_edit['priority'] in priority_options else 2
+        category_index = category_options.index(ticket_to_edit['category']) if is_edit_mode and ticket_to_edit['category'] in category_options else 0
+        delivery_date = pd.to_datetime(ticket_to_edit['expected_delivery']).date() if is_edit_mode and pd.notna(ticket_to_edit['expected_delivery']) else datetime.date.today()
+        
+        ticket_type = col1.selectbox("Type de demande *", type_options, index=type_index)
+        priority = col2.selectbox("Niveau de priorité *", priority_options, index=priority_index)
+        category = col1.selectbox("Catégorie fonctionnelle *", category_options, index=category_index)
+        expected_delivery = col2.date_input("Date de livraison souhaitée", value=delivery_date, min_value=datetime.date.today())
         
         st.markdown("---")
-        description = st.text_area("Description détaillée de votre besoin *", height=150)
-        business_justification = st.text_area("Justification métier (Quel est le gain attendu ?) *", height=100)
+        description = st.text_area("Description détaillée *", value=ticket_to_edit['description'] if is_edit_mode else "", height=150)
+        business_justification = st.text_area("Justification métier *", value=ticket_to_edit['business_justification'] if is_edit_mode else "", height=100)
         
         with st.expander("Informations techniques (optionnel)"):
-            data_sources = st.text_input("Sources de données à utiliser", placeholder="Ex: SAP, DWH, Fichier Excel...")
-            technical_requirements = st.text_area("Exigences techniques spécifiques", placeholder="Format, fréquence, contraintes...")
-            estimated_hours = st.number_input("Votre estimation en heures", min_value=0, max_value=200, value=0)
+            data_sources = st.text_input("Sources de données", value=ticket_to_edit['data_sources'] if is_edit_mode else "")
+            technical_requirements = st.text_area("Exigences techniques", value=ticket_to_edit['technical_requirements'] if is_edit_mode else "")
+            estimated_hours = st.number_input("Estimation en heures", min_value=0, value=ticket_to_edit['estimated_hours'] if is_edit_mode and pd.notna(ticket_to_edit['estimated_hours']) else 0)
 
-        if st.form_submit_button("Soumettre la demande", use_container_width=True, type="primary"):
+        if st.form_submit_button(button_label, use_container_width=True, type="primary"):
             if not all([title, description, business_justification]):
-                st.error("VeuIIez remplir tous les champs obligatoires (*)")
+                st.error("Veuillez remplir tous les champs obligatoires (*).")
             else:
                 conn = create_connection()
-                ticket_data = (title, description, ticket_type, category, priority, business_justification, expected_delivery, data_sources,
-                               technical_requirements, st.session_state['user_id'], estimated_hours if estimated_hours > 0 else None)
-                create_ticket(conn, ticket_data)
-                st.toast("Demande envoyée avec succès !", icon="🎉")
-                st.balloons()
+                if is_edit_mode:
+                    update_payload = {
+                        'title': title, 'description': description, 'ticket_type': ticket_type, 'category': category,
+                        'priority': priority, 'business_justification': business_justification, 'expected_delivery': expected_delivery,
+                        'data_sources': data_sources, 'technical_requirements': technical_requirements, 'estimated_hours': estimated_hours
+                    }
+                    update_ticket(conn, ticket_to_edit['id'], **update_payload)
+                    st.toast("Demande modifiée avec succès !", icon="👍")
+                else:
+                    ticket_data = (title, description, ticket_type, category, priority, business_justification, expected_delivery, data_sources,
+                                   technical_requirements, st.session_state['user_id'], estimated_hours if estimated_hours > 0 else None)
+                    create_ticket(conn, ticket_data)
+                    st.toast("Demande envoyée avec succès !", icon="🎉")
+                    st.balloons()
+
                 st.cache_data.clear()
-                time.sleep(1)
                 st.session_state.view = "Suivi des demandes"
                 st.rerun()
 
@@ -439,26 +469,18 @@ def show_tickets_list():
         return
 
     for _, ticket in df.iterrows():
-        priority_map = {"Critique": ("bi-exclamation-triangle-fill", "#E74C3C"), "Élevée": ("bi-exclamation-circle-fill", "#F39C12"), "Normale": ("bi-info-circle-fill", "#3498DB"), "Faible": ("bi-record-circle", "grey")}
-        icon, color = priority_map.get(ticket['priority'], ("bi-question-circle", "white"))
         
-        expander_title_html = f"""
-        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-            <span style="font-weight: bold;">#{ticket['id']} - {ticket['title']}</span>
-            <span>
-                <span style='color:{color}; margin-right: 1rem;'><i class='bi {icon}'></i> {ticket['priority']}</span>
-                <span style='background-color: #4A4A6A; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'>{ticket['status']}</span>
-            </span>
-        </div>
-        """
+        expander_title = f"**#{ticket['id']} - {ticket['title']}**"
+        
+        with st.expander(expander_title, expanded=False):
+            if ticket['status'] == 'Terminé':
+                st.markdown('<div style="background-color:rgba(113, 128, 147, 0.1); padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">', unsafe_allow_html=True)
 
-        with st.expander(f"Ticket #{ticket['id']}", expanded=False):
-            st.markdown(expander_title_html, unsafe_allow_html=True)
+            priority_map = {"Critique": ("bi-exclamation-triangle-fill", "#E74C3C"), "Élevée": ("bi-exclamation-circle-fill", "#F39C12"), "Normale": ("bi-info-circle-fill", "#3498DB"), "Faible": ("bi-record-circle", "grey")}
+            icon, color = priority_map.get(ticket['priority'], ("bi-question-circle", "white"))
+            st.markdown(f"Statut : _{ticket['status']}_ | <span style='color:{color};'><i class='bi {icon}'></i> **Priorité :** {ticket['priority']}</span>", unsafe_allow_html=True)
             st.markdown("---")
 
-            if ticket['status'] == 'Terminé':
-                st.markdown('<div style="background-color:#2F2F4A; padding: 1rem; border-radius: 0.5rem;">', unsafe_allow_html=True)
-            
             main_cols = st.columns([2, 1])
             with main_cols[0]:
                 tab_details, tab_reqs, tab_analyst = st.tabs(["Détails", "Exigences", "Suivi Analyste"])
@@ -466,6 +488,16 @@ def show_tickets_list():
                     st.markdown(f"**Demandeur :** {ticket['created_by']} | **Date :** {pd.to_datetime(ticket['created_at']).strftime('%d/%m/%Y')}")
                     st.markdown(f"**Description:**\n> {ticket['description']}")
                     st.markdown(f"**Justification Métier:**\n> {ticket['business_justification']}")
+                    
+                    is_creator = st.session_state['user_id'] == ticket['created_by_id']
+                    can_be_edited = ticket['status'] == 'Nouveau'
+                    if is_creator and can_be_edited:
+                        st.markdown("---")
+                        if st.button("Modifier ma demande", key=f"edit_btn_{ticket['id']}", type="secondary"):
+                            st.session_state.ticket_to_edit = ticket
+                            st.session_state.view = "Modifier la demande"
+                            st.rerun()
+
                 with tab_reqs:
                     st.markdown(f"**Type:** {ticket['ticket_type']} | **Catégorie:** {ticket['category']}")
                     st.markdown(f"**Sources de données:** `{ticket['data_sources'] or 'N/A'}`")
@@ -510,8 +542,8 @@ def show_tickets_list():
                             add_comment(conn, ticket['id'], st.session_state['user_id'], new_comment)
                             st.cache_data.clear(); st.rerun()
 
-            if ticket['status'] == 'Terminé':
-                st.markdown('</div>', unsafe_allow_html=True)
+        if ticket['status'] == 'Terminé':
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 def show_user_management_page():
@@ -626,6 +658,13 @@ def main():
         if st.session_state.view == "Dashboard": show_dashboard()
         elif st.session_state.view == "Suivi des demandes": show_tickets_list()
         elif st.session_state.view == "Nouvelle demande": show_ticket_form()
+        elif st.session_state.view == "Modifier la demande":
+            if 'ticket_to_edit' in st.session_state:
+                show_ticket_form(ticket_to_edit=st.session_state.ticket_to_edit)
+            else:
+                st.warning("Aucun ticket sélectionné pour la modification.")
+                st.session_state.view = "Suivi des demandes"
+                st.rerun()
         elif st.session_state.view == "Gestion des utilisateurs": show_user_management_page()
         elif st.session_state.view == "Mon Profil": show_profile_page()
 
