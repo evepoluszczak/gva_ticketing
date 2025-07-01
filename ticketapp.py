@@ -8,6 +8,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 import base64
+import sendgrid
+from sendgrid.helpers.mail import Mail
 
 # ==============================================================================
 # CONFIGURATION DE LA PAGE
@@ -111,7 +113,7 @@ def load_css():
     """, unsafe_allow_html=True)
 
 # ==============================================================================
-# SECTION BASE DE DONNÉES
+# SECTION BASE DE DONNÉES ET FONCTIONS UTILITAIRES
 # ==============================================================================
 
 def hash_password(password):
@@ -120,7 +122,6 @@ def hash_password(password):
 @st.cache_resource
 def create_connection(db_file="oop_ticketing_geneva.db"):
     try:
-        # Correction de l'erreur de thread en autorisant le partage de la connexion
         return sqlite3.connect(db_file, check_same_thread=False)
     except sqlite3.Error as e:
         st.error(f"Erreur de connexion à la base de données : {e}")
@@ -169,9 +170,7 @@ def run_setup():
         cur.execute("SELECT 1 FROM users WHERE username='test_user'")
         if cur.fetchone() is None:
             add_user(conn, 'test_user', 'test123', 'test@gva.ch', 'Utilisateur Test', 'Opérations')
-        # La connexion est gérée par le cache de Streamlit, pas besoin de la fermer ici.
 
-# Fonctions CRUD (Create, Read, Update, Delete)
 def add_user(conn, username, password, email=None, full_name=None, department=None, is_analyst=False):
     sql = 'INSERT INTO users(username, password, email, full_name, department, is_analyst) VALUES(?,?,?,?,?,?)'
     try:
@@ -193,32 +192,24 @@ def get_all_analysts(conn):
     return cur.fetchall()
 
 def get_all_users(conn):
-    """Récupère tous les utilisateurs pour la gestion."""
     return pd.read_sql_query("SELECT id, full_name, username, email, department, is_analyst FROM users", conn)
 
 def update_user_role(conn, user_id, is_analyst):
-    """Met à jour le rôle d'un utilisateur."""
     sql = "UPDATE users SET is_analyst = ? WHERE id = ?"
     cur = conn.cursor()
     cur.execute(sql, (1 if is_analyst else 0, user_id))
     conn.commit()
 
 def delete_user(conn, user_id):
-    """Supprime un utilisateur et anonymise ses tickets/commentaires."""
     try:
         cur = conn.cursor()
-        # Anonymiser les tickets créés par l'utilisateur
         cur.execute("UPDATE tickets SET created_by_id = NULL WHERE created_by_id = ?", (user_id,))
-        # Anonymiser les tickets assignés à l'utilisateur (s'il était analyste)
         cur.execute("UPDATE tickets SET assigned_to_id = NULL WHERE assigned_to_id = ?", (user_id,))
-        # Supprimer les commentaires de l'utilisateur
         cur.execute("DELETE FROM comments WHERE user_id = ?", (user_id,))
-        # Supprimer l'utilisateur
         cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
     except sqlite3.Error as e:
         st.error(f"Erreur lors de la suppression de l'utilisateur : {e}")
-
 
 def create_ticket(conn, ticket_data):
     sql = '''INSERT INTO tickets(title, description, ticket_type, category, priority, business_justification, 
@@ -241,10 +232,8 @@ def get_tickets_for_user(_conn, user_id, is_analyst=False):
         return pd.read_sql_query(f"{base_query} WHERE t.created_by_id=? ORDER BY t.created_at DESC", _conn, params=(user_id,))
 
 def update_ticket(conn, ticket_id, **kwargs):
-    # Filtrer les clés dont la valeur est None pour éviter les erreurs
     valid_kwargs = {k: v for k, v in kwargs.items() if v is not None}
-    if not valid_kwargs:
-        return # Ne rien faire si aucune donnée valide n'est fournie
+    if not valid_kwargs: return
     set_clause = ", ".join([f"{key} = ?" for key in valid_kwargs.keys()])
     sql = f'UPDATE tickets SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     cur = conn.cursor()
@@ -275,9 +264,31 @@ def get_dashboard_stats(_conn):
     return stats
 
 def get_ticket_count(conn):
-    """Retourne le nombre total de tickets."""
     return pd.read_sql("SELECT COUNT(*) FROM tickets", conn).iloc[0, 0]
 
+def send_new_ticket_notification(ticket_id, ticket_title, creator_name):
+    """Envoie un e-mail de notification via SendGrid."""
+    try:
+        api_key = st.secrets["SENDGRID_API_KEY"]
+        sender = st.secrets["SENDER_EMAIL"]
+        recipients = st.secrets["RECIPIENT_EMAILS"].split(',')
+        
+        sg = sendgrid.SendGridAPIClient(api_key=api_key)
+        
+        subject = f"Nouveau Ticket #{ticket_id}: {ticket_title}"
+        html_content = f"""
+        <h3>Une nouvelle demande a été créée sur le portail OOP.</h3>
+        <p><strong>Titre :</strong> {ticket_title}</p>
+        <p><strong>Demandeur :</strong> {creator_name}</p>
+        <p>Veuillez vous connecter à l'application pour voir les détails.</p>
+        """
+        
+        message = Mail(from_email=sender, to_emails=recipients, subject=subject, html_content=html_content)
+        sg.send(message)
+        
+    except Exception as e:
+        print(f"Erreur lors de l'envoi de l'e-mail : {e}")
+        pass
 
 # ==============================================================================
 # COMPOSANTS D'INTERFACE
@@ -286,7 +297,6 @@ def get_ticket_count(conn):
 def show_auth_page():
     """Affiche la page de connexion ou d'inscription."""
     st.markdown(f'<div style="text-align: center;"><img src="{main_logo_url}" alt="Genève Aéroport Logo" width="250"></div>', unsafe_allow_html=True)
-
     st.markdown('<h1 style="text-align: center;">Portail de demandes</h1>', unsafe_allow_html=True)
     st.markdown('<h3 style="text-align: center; color: #B0B0C0;">Performance & Forecasting Operations</h3>', unsafe_allow_html=True)
     
@@ -341,22 +351,20 @@ def show_auth_page():
                 st.session_state.auth_view = 'login'; st.rerun()
 
 def show_dashboard():
-    """Affiche le dashboard avec les statistiques."""
     st.markdown("<h2><i class='bi bi-bar-chart-line-fill'></i> Tableau de bord global</h2>", unsafe_allow_html=True)
     conn = create_connection()
     stats = get_dashboard_stats(conn)
     
     kpi_cols = st.columns(4)
     with kpi_cols[0]:
-        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-inbox-fill'></i> Total des demandes</div><div class='kpi-value'>{stats['total']}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-inbox-fill'></i> Total</div><div class='kpi-value'>{stats['total']}</div></div>", unsafe_allow_html=True)
     with kpi_cols[1]:
-        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-file-earmark-plus-fill'></i> Nouvelles demandes</div><div class='kpi-value'>{stats['new']}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-file-earmark-plus-fill'></i> Nouveaux</div><div class='kpi-value'>{stats['new']}</div></div>", unsafe_allow_html=True)
     with kpi_cols[2]:
-        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-hourglass-split'></i> Demandes en cours</div><div class='kpi-value'>{stats['in_progress']}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-hourglass-split'></i> En cours</div><div class='kpi-value'>{stats['in_progress']}</div></div>", unsafe_allow_html=True)
     with kpi_cols[3]:
-        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-check-circle-fill'></i> Demandes terminées</div><div class='kpi-value'>{stats['completed']}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'><i class='bi bi-check-circle-fill'></i> Terminés</div><div class='kpi-value'>{stats['completed']}</div></div>", unsafe_allow_html=True)
 
-    
     st.markdown("---")
     
     chart_cols = st.columns(2)
@@ -377,7 +385,6 @@ def show_dashboard():
         chart_cols[1].plotly_chart(fig_priority, use_container_width=True)
 
 def show_ticket_form(ticket_to_edit=None):
-    """Affiche le formulaire pour créer ou modifier un ticket."""
     is_edit_mode = ticket_to_edit is not None
     form_title = "Modifier la demande" if is_edit_mode else "Créer une nouvelle demande"
     button_label = "Enregistrer les modifications" if is_edit_mode else "Soumettre la demande"
@@ -430,7 +437,8 @@ def show_ticket_form(ticket_to_edit=None):
                 else:
                     ticket_data = (title, description, ticket_type, category, priority, business_justification, expected_delivery, data_sources,
                                    technical_requirements, st.session_state['user_id'], estimated_hours if estimated_hours > 0 else None)
-                    create_ticket(conn, ticket_data)
+                    ticket_id = create_ticket(conn, ticket_data)
+                    send_new_ticket_notification(ticket_id, title, st.session_state['full_name'])
                     st.toast("Demande envoyée avec succès !", icon="🎉")
                     st.balloons()
 
@@ -543,7 +551,6 @@ def show_tickets_list():
 
 
 def show_user_management_page():
-    """Affiche la page de gestion des utilisateurs pour les analystes."""
     st.markdown("<h2><i class='bi bi-people-fill'></i> Gestion des utilisateurs</h2>", unsafe_allow_html=True)
     conn = create_connection()
     
@@ -611,20 +618,25 @@ def main():
 
             if st.button("Suivi des demandes", use_container_width=True, type="primary" if st.session_state.view == "Suivi des demandes" else "secondary"):
                 st.session_state.view = "Suivi des demandes"
+                st.rerun()
             if st.button("Nouvelle demande", use_container_width=True, type="primary" if st.session_state.view == "Nouvelle demande" else "secondary"):
                 st.session_state.view = "Nouvelle demande"
+                st.rerun()
                 
             if st.session_state.get('is_analyst'):
                 st.markdown("---")
                 st.subheader("Administration")
                 if st.button("Dashboard", use_container_width=True, type="primary" if st.session_state.view == "Dashboard" else "secondary"):
                     st.session_state.view = "Dashboard"
+                    st.rerun()
                 if st.button("Gestion des utilisateurs", use_container_width=True, type="primary" if st.session_state.view == "Gestion des utilisateurs" else "secondary"):
                     st.session_state.view = "Gestion des utilisateurs"
+                    st.rerun()
                 
             st.markdown("---")
             if st.button("Mon Profil", use_container_width=True, type="primary" if st.session_state.view == "Mon Profil" else "secondary"):
                  st.session_state.view = "Mon Profil"
+                 st.rerun()
             if st.button("Déconnexion", use_container_width=True):
                 auth_view = st.session_state.get('auth_view', 'login')
                 for key in list(st.session_state.keys()): del st.session_state[key]
@@ -645,11 +657,6 @@ def main():
                 st.toast(f"{new_count} nouvelle{plural} demande{plural} !", icon="🔔")
                 st.session_state.last_ticket_count = current_ticket_count
         
-        if 'current_view' not in st.session_state: st.session_state.current_view = st.session_state.view
-        if st.session_state.current_view != st.session_state.view:
-            st.session_state.current_view = st.session_state.view
-            st.rerun()
-            
         if st.session_state.view == "Dashboard": show_dashboard()
         elif st.session_state.view == "Suivi des demandes": show_tickets_list()
         elif st.session_state.view == "Nouvelle demande": show_ticket_form()
